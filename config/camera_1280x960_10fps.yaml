@@ -1,0 +1,41 @@
+!!python/object/new:dynamic_reconfigure.encoding.Config
+dictitems:
+  ISO: 1600
+  awb_mode: auto
+  brightness: 13
+  contrast: 69
+  exposure_compensation: 10
+  exposure_mode: auto
+  groups: !!python/object/new:dynamic_reconfigure.encoding.Config
+    dictitems:
+      ISO: 1600
+      awb_mode: auto
+      brightness: 13
+      contrast: 69
+      exposure_compensation: 10
+      exposure_mode: auto
+      groups: !!python/object/new:dynamic_reconfigure.encoding.Config
+        state: []
+      hFlip: false
+      id: 0
+      name: Default
+      parameters: !!python/object/new:dynamic_reconfigure.encoding.Config
+        state: []
+      parent: 0
+      saturation: 0
+      sharpness: -100
+      shutter_speed: 53448
+      state: true
+      type: ''
+      vFlip: true
+      video_stabilisation: false
+      zoom: 1.0
+    state: []
+  hFlip: false
+  saturation: 0
+  sharpness: -100
+  shutter_speed: 53448
+  vFlip: true
+  video_stabilisation: false
+  zoom: 1.0
+state: []
