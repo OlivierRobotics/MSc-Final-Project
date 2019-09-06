@@ -15,7 +15,7 @@ from baselines.ppo1.mlp_policy import MlpPolicy
 from senseact.envs.ur.reacher_env import ReacherEnv
 from senseact.utils import tf_set_seeds, NormalizedEnv
 
-sys.path.append("/home/ros/SenseAct/examples/advanced")
+sys.path.append("/home/oli/SenseAct/examples/advanced")
 
 from helper import create_callback
 
@@ -39,8 +39,8 @@ def main():
             derivative_type="none",
             deriv_action_max=5,
             first_deriv_max=2,
-            accel_max=1.4,
-            speed_max=0.3,
+            accel_max=1.4, # was 1.4
+            speed_max=0.3, # was 0.3
             speedj_a=1.4,
             episode_length_time=4.0,
             episode_length_step=None,
@@ -75,8 +75,9 @@ def main():
     kindred_callback = create_callback(shared_returns)
 
     # Train baselines TRPO
-    learn(env, policy_fn,
-          max_timesteps=200000,
+    learn(network='mlp', 
+    	  env=env, 
+    	  total_timesteps=200000,
           timesteps_per_batch=2048,
           max_kl=0.05,
           cg_iters=10,
