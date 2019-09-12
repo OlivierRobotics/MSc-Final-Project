@@ -14,6 +14,7 @@ from baselines.ppo1.mlp_policy import MlpPolicy
 
 from senseact.envs.ur.reacher_env import ReacherEnv
 from senseact.utils import tf_set_seeds, NormalizedEnv
+from tensorflow.train import Saver
 
 sys.path.append("/home/oli/SenseAct/examples/advanced")
 
@@ -77,7 +78,7 @@ def main():
     # Train baselines TRPO
     learn(network='mlp', 
     	  env=env, 
-    	  total_timesteps=200000,
+    	  total_timesteps=10000, #Originally 200,000
           timesteps_per_batch=2048,
           max_kl=0.05,
           cg_iters=10,
@@ -95,6 +96,8 @@ def main():
     pp.join()
 
     env.close()
+    saver = Saver()
+    saver.save(sess, "/home/oli/senseact_ws/src/MSc-Final-Project/src/saved_policies/TRPOtest01")
 
 
 def plot_ur5_reacher(env, batch_size, shared_returns, plot_running):

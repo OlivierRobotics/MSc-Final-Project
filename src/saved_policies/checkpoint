@@ -1,0 +1,2 @@
+model_checkpoint_path: "/home/oli/senseact_ws/src/MSc-Final-Project/src/saved_policies/TRPOtest01"
+all_model_checkpoint_paths: "/home/oli/senseact_ws/src/MSc-Final-Project/src/saved_policies/TRPOtest01"
