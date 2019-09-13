@@ -14,11 +14,13 @@ from baselines.ppo1.mlp_policy import MlpPolicy
 
 from senseact.envs.ur.reacher_env import ReacherEnv
 from senseact.utils import tf_set_seeds, NormalizedEnv
+
 from tensorflow.train import Saver
+from tensorflow.saved_model import simple_save, loader
 
-sys.path.append("/home/oli/SenseAct/examples/advanced")
-
-from helper import create_callback
+#sys.path.append("/home/oli/SenseAct/examples/advanced")
+#from helper import create_callback
+from callback import create_callback
 
 
 
@@ -59,9 +61,14 @@ def main():
     # Create baselines TRPO policy function
     sess = U.single_threaded_session()
     sess.__enter__()
-    def policy_fn(name, ob_space, ac_space):
+
+    # Load previously trained model if it exists
+
+
+    # No longer needed
+    """def policy_fn(name, ob_space, ac_space):
         return MlpPolicy(name=name, ob_space=ob_space, ac_space=ac_space,
-            hid_size=64, num_hid_layers=2)
+            hid_size=64, num_hid_layers=2)"""
 
     # Create and start plotting process
     plot_running = Value('i', 1)
@@ -87,7 +94,8 @@ def main():
           vf_stepsize=0.001,
           gamma=0.995,
           lam=0.995,
-          callback=kindred_callback
+          callback=kindred_callback,
+          load_path='saved_policies/trpo01'
           )
 
     # Safely terminate plotter process
@@ -96,8 +104,12 @@ def main():
     pp.join()
 
     env.close()
-    saver = Saver()
-    saver.save(sess, "/home/oli/senseact_ws/src/MSc-Final-Project/src/saved_policies/TRPOtest01")
+    
+    # save variables
+    #saver.save(sess, "/home/oli/senseact_ws/src/MSc-Final-Project/src/saved_policies/TRPOtest01")
+
+    # Save model
+    #simple_save(sess, "/home/oli/senseact_ws/src/MSc-Final-Project/src/saved_models/0001")
 
 
 def plot_ur5_reacher(env, batch_size, shared_returns, plot_running):
