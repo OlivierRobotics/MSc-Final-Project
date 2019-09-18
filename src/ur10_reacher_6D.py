@@ -84,6 +84,8 @@ def main():
 
     # Train baselines TRPO
     learn(network='mlp', 
+    	  num_layers=2, # these are network_kwargs for the MLP network
+    	  num_hidden=64,
     	  env=env, 
     	  total_timesteps=10000, #Originally 200,000
           timesteps_per_batch=2048,
@@ -104,12 +106,6 @@ def main():
     pp.join()
 
     env.close()
-    
-    # save variables
-    #saver.save(sess, "/home/oli/senseact_ws/src/MSc-Final-Project/src/saved_policies/TRPOtest01")
-
-    # Save model
-    #simple_save(sess, "/home/oli/senseact_ws/src/MSc-Final-Project/src/saved_models/0001")
 
 
 def plot_ur5_reacher(env, batch_size, shared_returns, plot_running):
