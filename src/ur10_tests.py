@@ -23,7 +23,10 @@ from tensorflow.saved_model import simple_save, loader
 from callback import create_callback
 from run_policy import run_policy
 
-# an environment that allows points to be selected on a x_points x y_points grid and tests each point num_test times
+from senseact.devices.ur import ur_utils
+from senseact import utils
+
+# an environment that allows points to be selected on a x_points x y_points x z _points grid within the end effector bounds and tests each point num_test times
 class GridTestEnv(ReacherEnv):
     def __init__(self,
                  setup,
@@ -31,7 +34,6 @@ class GridTestEnv(ReacherEnv):
                  dof=6,
                  control_type='position',
                  derivative_type='none',
-                 target_type='position',
                  reset_type='random',
                  reward_type='linear',
                  deriv_action_max=10,
@@ -53,6 +55,7 @@ class GridTestEnv(ReacherEnv):
                  delay=0.0,  # to simulate extra delay in the system
                  x_points=10,
                  y_points=10,
+                 z_points=10,
                  num_test=10,
                  **kwargs):
         
@@ -62,22 +65,123 @@ class GridTestEnv(ReacherEnv):
 
         self._x_points = x_points
         self._y_points = y_points
+        self._z_points = z_points
         self._num_test = num_test
 
+        self._target_generator_ = self._target_generator_()
 
-def run_policy_test():
+        super(GridTestEnv, self).__init__(setup=setup,
+                                         host=host,
+                                         dof=dof,
+                                         control_type=control_type,
+                                         derivative_type=derivative_type,
+                                         target_type='position',
+                                         reset_type=reset_type,
+                                         reward_type=reward_type,
+                                         deriv_action_max=deriv_action_max,
+                                         first_deriv_max=first_deriv_max,  # used only with second derivative control
+                                         vel_penalty=vel_penalty,
+                                         obs_history=obs_history,
+                                         actuation_sync_period=actuation_sync_period,
+                                         episode_length_time=episode_length_time,
+                                         episode_length_step=episode_length_step,
+                                         rllab_box = rllab_box,
+                                         servoj_t=servoj_t,
+                                         servoj_gain=servoj_gain,
+                                         speedj_a=speedj_a,
+                                         speedj_t_min=speedj_t_min,
+                                         movej_t=movej_t, # used for resetting
+                                         accel_max=accel_max,
+                                         speed_max=speed_max,
+                                         dt=dt,
+                                         delay=delay,  # to simulate extra delay in the system
+                                         **kwargs)
+
+    def _reset_(self):
+        """Resets the environment episode.
+
+        Moves the arm to either fixed reference or random position and
+        generates a new target from _target_generator_.
+        """
+        print("Resetting")
+
+        x_target = self._target_generator_.__next__()
+        np.copyto(self._x_target_, x_target)
+        self._target_ = self._x_target_[self._end_effector_indices]
+
+        self._action_ = self._rand_obj_.uniform(self._action_low, self._action_high)
+        self._cmd_prev_ = np.zeros(len(self._action_low))  # to be used with derivative control of velocity
+        if self._reset_type != 'none':
+            if self._reset_type == 'random':
+                reset_angles, _ = self._pick_random_angles_()
+            elif self._reset_type == 'zero':
+                reset_angles = self._q_ref[self._joint_indices]
+            self._reset_arm(reset_angles)
+
+        rand_state_array_type, rand_state_array_size, rand_state_array = utils.get_random_state_array(
+            self._rand_obj_.get_state()
+        )
+        np.copyto(self._shared_rstate_array_, np.frombuffer(rand_state_array, dtype=rand_state_array_type))
+
+        print("Reset done")
+
+    def _target_generator_(self):
+        # increments for each dimension
+        x_inc = (self._end_effector_high[0] - self._end_effector_low[0]) / (self._x_points+1)
+        y_inc = (self._end_effector_high[1] - self._end_effector_low[1]) / (self._y_points+1)
+        z_inc = (self._end_effector_high[2] - self._end_effector_low[2]) / (self._z_points+1)
+
+        # lists of x, y, z coords
+        x_points = [self._end_effector_low[0] + x_inc * x_point for x_point in range(1, self._x_points+2)]
+        y_points = [self._end_effector_low[1] + y_inc * y_point for y_point in range(1, self._y_points+2)]
+        z_points = [self._end_effector_low[2] + z_inc * z_point for z_point in range(1, self._z_points+2)]
+
+        for x in range(self._x_points):
+            for y in range(self._y_points):
+                for z in range(self._z_points):
+                    for test in range(self._num_test):
+                        yield x_points[x], y_points[y], z_points[z]
+
+# callback to use for logging 
+def grid_test_callback(locals, globals):
+    shared_returns = globals['__builtins__']['shared_returns']
+        if locals['iters_so_far'] > 0:
+            ep_rets = locals['seg']['ep_rets']
+            ep_lens = locals['seg']['ep_lens']
+            # create copy of policy object and save policy
+            #pi = locals['pi']
+            #pi.save('saved_policies/trpo01')
+            if len(ep_rets):
+                if not shared_returns is None:
+                    shared_returns['write_lock'] = True
+                    shared_returns['episodic_returns'] += ep_rets
+                    shared_returns['episodic_lengths'] += ep_lens
+                    shared_returns['write_lock'] = False
+                    with open('experiment_data/gridtest.csv', 'a', newline='') as csvfile:
+                        csvwriter = csv.writer(csvfile)
+                        for data in zip(ep_rets, ep_lens):
+                            csvwriter.writerow(data)
+
+def run_grid_test():
     # use fixed random state
     rand_state = np.random.RandomState(1).get_state()
     np.random.set_state(rand_state)
     tf_set_seeds(np.random.randint(1, 2**31 - 1))
 
-    # Create UR5 Reacher2D environment
-    env = ReacherEnv(
+    # set up coordination between eps per iteration and num_test
+    episode_length_time = 4.0
+    dt = 0.04
+    num_test = 3
+    timesteps_per_ep = episode_length_time / dt
+    timesteps_per_batch = int(timesteps_per_ep * num_test) # small extra time just in case
+
+
+    # Create GridTest environment
+    env = GridTestEnv(
             setup="UR10_6dof",
             host=None,
             dof=6,
             control_type="velocity",
-            target_type="position",
             reset_type="zero",
             reward_type="precision",
             derivative_type="none",
@@ -86,15 +190,16 @@ def run_policy_test():
             accel_max=1.4, # was 1.4
             speed_max=0.3, # was 0.3
             speedj_a=1.4,
-            episode_length_time=4.0,
+            episode_length_time=episode_length_time,
             episode_length_step=None,
             actuation_sync_period=1,
-            dt=0.04,
+            dt=dt,
             run_mode="multiprocess",
             rllab_box=False,
             movej_t=2.0,
             delay=0.0,
-            random_state=rand_state
+            random_state=rand_state,
+            num_test=num_test
         )
     env = NormalizedEnv(env)
     # Start environment processes
@@ -121,7 +226,7 @@ def run_policy_test():
           num_hidden=64,
           env=env, 
           total_timesteps=50000, #Originally 200,000
-          timesteps_per_batch=2048,
+          timesteps_per_batch=timesteps_per_batch,
           callback=kindred_callback,
           load_path='saved_policies/trpo01'
           )
@@ -197,7 +302,7 @@ def main():
     	  num_hidden=64,
     	  env=env, 
     	  total_timesteps=50000, #Originally 200,000
-          timesteps_per_batch=2048,
+          timesteps_per_batch=1000,
           max_kl=0.05,
           cg_iters=10,
           cg_damping=0.1,
@@ -308,4 +413,4 @@ def plot_ur5_reacher(env, batch_size, shared_returns, plot_running):
 
 
 if __name__ == '__main__':
-    run_policy_test()
+    run_grid_test()

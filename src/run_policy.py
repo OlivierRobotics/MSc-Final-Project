@@ -21,6 +21,7 @@ except ImportError:
 
 def traj_segment_generator(pi, env, horizon, stochastic):
     # Initialize state variables
+    print("Horizon = %i"%horizon)
     t = 0
     ac = env.action_space.sample()
     new = True
@@ -171,6 +172,7 @@ def run_policy(*,
     U.initialize()
     if load_path is not None and os.path.exists(load_path+'.meta'):
         pi.load(load_path)
+        print('Loaded from '+load_path)
 
     th_init = get_flat()
     if MPI is not None:
