@@ -16,15 +16,15 @@ def create_callback(shared_returns):
             ep_rets = locals['seg']['ep_rets']
             ep_lens = locals['seg']['ep_lens']
             # create copy of policy object and save policy
-            pi = locals['pi']
-            pi.save('saved_policies/trpo01')
+            #pi = locals['pi']
+            #pi.save('saved_policies/trpo01')
             if len(ep_rets):
                 if not shared_returns is None:
                     shared_returns['write_lock'] = True
                     shared_returns['episodic_returns'] += ep_rets
                     shared_returns['episodic_lengths'] += ep_lens
                     shared_returns['write_lock'] = False
-                    with open('experiment_data/test01.csv', 'a', newline='') as csvfile:
+                    with open('experiment_data/test02.csv', 'a', newline='') as csvfile:
                         csvwriter = csv.writer(csvfile)
                         for data in zip(ep_rets, ep_lens):
                             csvwriter.writerow(data)

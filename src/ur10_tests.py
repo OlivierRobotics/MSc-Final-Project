@@ -21,8 +21,117 @@ from tensorflow.saved_model import simple_save, loader
 #sys.path.append("/home/oli/SenseAct/examples/advanced")
 #from helper import create_callback
 from callback import create_callback
+from run_policy import run_policy
+
+# an environment that allows points to be selected on a x_points x y_points grid and tests each point num_test times
+class GridTestEnv(ReacherEnv):
+    def __init__(self,
+                 setup,
+                 host=None,
+                 dof=6,
+                 control_type='position',
+                 derivative_type='none',
+                 target_type='position',
+                 reset_type='random',
+                 reward_type='linear',
+                 deriv_action_max=10,
+                 first_deriv_max=10,  # used only with second derivative control
+                 vel_penalty=0,
+                 obs_history=1,
+                 actuation_sync_period=1,
+                 episode_length_time=None,
+                 episode_length_step=None,
+                 rllab_box = False,
+                 servoj_t=ur_utils.COMMANDS['SERVOJ']['default']['t'],
+                 servoj_gain=ur_utils.COMMANDS['SERVOJ']['default']['gain'],
+                 speedj_a=ur_utils.COMMANDS['SPEEDJ']['default']['a'],
+                 speedj_t_min=ur_utils.COMMANDS['SPEEDJ']['default']['t_min'],
+                 movej_t=2, # used for resetting
+                 accel_max=None,
+                 speed_max=None,
+                 dt=0.008,
+                 delay=0.0,  # to simulate extra delay in the system
+                 x_points=10,
+                 y_points=10,
+                 num_test=10,
+                 **kwargs):
+        
+        assert(x_points > 0)
+        assert(y_points > 0)
+        assert(num_test > 0)
+
+        self._x_points = x_points
+        self._y_points = y_points
+        self._num_test = num_test
 
 
+def run_policy_test():
+    # use fixed random state
+    rand_state = np.random.RandomState(1).get_state()
+    np.random.set_state(rand_state)
+    tf_set_seeds(np.random.randint(1, 2**31 - 1))
+
+    # Create UR5 Reacher2D environment
+    env = ReacherEnv(
+            setup="UR10_6dof",
+            host=None,
+            dof=6,
+            control_type="velocity",
+            target_type="position",
+            reset_type="zero",
+            reward_type="precision",
+            derivative_type="none",
+            deriv_action_max=5,
+            first_deriv_max=2,
+            accel_max=1.4, # was 1.4
+            speed_max=0.3, # was 0.3
+            speedj_a=1.4,
+            episode_length_time=4.0,
+            episode_length_step=None,
+            actuation_sync_period=1,
+            dt=0.04,
+            run_mode="multiprocess",
+            rllab_box=False,
+            movej_t=2.0,
+            delay=0.0,
+            random_state=rand_state
+        )
+    env = NormalizedEnv(env)
+    # Start environment processes
+    env.start()
+    # Create baselines TRPO policy function
+    sess = U.single_threaded_session()
+    sess.__enter__()
+
+    # Create and start plotting process
+    plot_running = Value('i', 1)
+    shared_returns = Manager().dict({"write_lock": False,
+                                     "episodic_returns": [],
+                                     "episodic_lengths": [], })
+    # Spawn plotting process
+    pp = Process(target=plot_ur5_reacher, args=(env, 2048, shared_returns, plot_running))
+    pp.start()
+
+    # Create callback function for logging data from baselines TRPO learn
+    kindred_callback = create_callback(shared_returns)
+
+    # Run TRPO policy
+    run_policy(network='mlp', 
+          num_layers=2, # these are network_kwargs for the MLP network
+          num_hidden=64,
+          env=env, 
+          total_timesteps=50000, #Originally 200,000
+          timesteps_per_batch=2048,
+          callback=kindred_callback,
+          load_path='saved_policies/trpo01'
+          )
+
+    # Safely terminate plotter process
+    plot_running.value = 0  # shutdown plotting process
+    time.sleep(2)
+    pp.join()
+
+    env.close()
 
 def main():
     # use fixed random state
@@ -87,7 +196,7 @@ def main():
     	  num_layers=2, # these are network_kwargs for the MLP network
     	  num_hidden=64,
     	  env=env, 
-    	  total_timesteps=10000, #Originally 200,000
+    	  total_timesteps=50000, #Originally 200,000
           timesteps_per_batch=2048,
           max_kl=0.05,
           cg_iters=10,
@@ -97,8 +206,8 @@ def main():
           gamma=0.995,
           lam=0.995,
           callback=kindred_callback,
-          load_path='saved_policies/trpo02',
-          save_path='saved_policies/trpo02'
+          load_path=None,
+          save_path='saved_policies/trpo02',
           )
 
     # Safely terminate plotter process
@@ -199,4 +308,4 @@ def plot_ur5_reacher(env, batch_size, shared_returns, plot_running):
 
 
 if __name__ == '__main__':
-    main()
+    run_policy_test()
