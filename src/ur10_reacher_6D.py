@@ -87,7 +87,7 @@ def main():
     	  num_layers=2, # these are network_kwargs for the MLP network
     	  num_hidden=64,
     	  env=env, 
-    	  total_timesteps=10000, #Originally 200,000
+    	  total_timesteps=50000, #Originally 200,000
           timesteps_per_batch=2048,
           max_kl=0.05,
           cg_iters=10,
@@ -97,8 +97,8 @@ def main():
           gamma=0.995,
           lam=0.995,
           callback=kindred_callback,
-          load_path='saved_policies/trpo02',
-          save_path='saved_policies/trpo02'
+          load_path='saved_policies/trpo01/trpo01',
+          save_path='saved_policies/trpo01/trpo01'
           )
 
     # Safely terminate plotter process

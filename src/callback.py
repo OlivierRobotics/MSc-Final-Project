@@ -24,7 +24,7 @@ def create_callback(shared_returns):
                     shared_returns['episodic_returns'] += ep_rets
                     shared_returns['episodic_lengths'] += ep_lens
                     shared_returns['write_lock'] = False
-                    with open('experiment_data/test02.csv', 'a', newline='') as csvfile:
+                    with open('experiment_data/trpo01.csv', 'a', newline='') as csvfile:
                         csvwriter = csv.writer(csvfile)
                         for data in zip(ep_rets, ep_lens):
                             csvwriter.writerow(data)

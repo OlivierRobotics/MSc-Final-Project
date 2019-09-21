@@ -26,6 +26,9 @@ from run_policy import run_policy
 from senseact.devices.ur import ur_utils
 from senseact import utils
 
+import builtins
+import csv
+
 # an environment that allows points to be selected on a x_points x y_points x z _points grid within the end effector bounds and tests each point num_test times
 class GridTestEnv(ReacherEnv):
     def __init__(self,
@@ -145,24 +148,24 @@ class GridTestEnv(ReacherEnv):
 # callback to use for logging 
 def grid_test_callback(locals, globals):
     shared_returns = globals['__builtins__']['shared_returns']
-        if locals['iters_so_far'] > 0:
-            ep_rets = locals['seg']['ep_rets']
-            ep_lens = locals['seg']['ep_lens']
-            # create copy of policy object and save policy
-            #pi = locals['pi']
-            #pi.save('saved_policies/trpo01')
-            if len(ep_rets):
-                if not shared_returns is None:
-                    shared_returns['write_lock'] = True
-                    shared_returns['episodic_returns'] += ep_rets
-                    shared_returns['episodic_lengths'] += ep_lens
-                    shared_returns['write_lock'] = False
-                    with open('experiment_data/gridtest.csv', 'a', newline='') as csvfile:
-                        csvwriter = csv.writer(csvfile)
-                        for data in zip(ep_rets, ep_lens):
-                            csvwriter.writerow(data)
+    if locals['iters_so_far'] > 0:
+        ep_rets = locals['seg']['ep_rets']
+        ep_lens = locals['seg']['ep_lens']
+        target = locals['env']._x_target_
 
-def run_grid_test():
+        if len(ep_rets):
+            if not shared_returns is None:
+                shared_returns['write_lock'] = True
+                shared_returns['episodic_returns'] += ep_rets
+                shared_returns['episodic_lengths'] += ep_lens
+                shared_returns['write_lock'] = False
+                with open('experiment_data/gridtest.csv', 'a', newline='') as csvfile:
+                    csvwriter = csv.writer(csvfile)
+                    row = [np.mean(ep_rets), *target]
+                    csvwriter.writerow(row)
+
+# Load a policy from policy_path and runs a grid test on it with x, y, z_points points testing each point num_test times
+def run_grid_test(x_points, y_points, z_points, num_test, policy_path):
     # use fixed random state
     rand_state = np.random.RandomState(1).get_state()
     np.random.set_state(rand_state)
@@ -171,7 +174,6 @@ def run_grid_test():
     # set up coordination between eps per iteration and num_test
     episode_length_time = 4.0
     dt = 0.04
-    num_test = 3
     timesteps_per_ep = episode_length_time / dt
     timesteps_per_batch = int(timesteps_per_ep * num_test) # small extra time just in case
 
@@ -199,6 +201,9 @@ def run_grid_test():
             movej_t=2.0,
             delay=0.0,
             random_state=rand_state,
+            x_points=x_points,
+            y_points=y_points,
+            z_points=z_points,
             num_test=num_test
         )
     env = NormalizedEnv(env)
@@ -213,12 +218,11 @@ def run_grid_test():
     shared_returns = Manager().dict({"write_lock": False,
                                      "episodic_returns": [],
                                      "episodic_lengths": [], })
+    builtins.shared_returns = shared_returns
+
     # Spawn plotting process
     pp = Process(target=plot_ur5_reacher, args=(env, 2048, shared_returns, plot_running))
     pp.start()
-
-    # Create callback function for logging data from baselines TRPO learn
-    kindred_callback = create_callback(shared_returns)
 
     # Run TRPO policy
     run_policy(network='mlp', 
@@ -227,8 +231,8 @@ def run_grid_test():
           env=env, 
           total_timesteps=50000, #Originally 200,000
           timesteps_per_batch=timesteps_per_batch,
-          callback=kindred_callback,
-          load_path='saved_policies/trpo01'
+          callback=grid_test_callback,
+          load_path=policy_path
           )
 
     # Safely terminate plotter process
@@ -322,6 +326,129 @@ def main():
 
     env.close()
 
+class MovingPointEnv(ReacherEnv):
+    def __init__(self,
+                 setup,
+                 host=None,
+                 dof=6,
+                 control_type='position',
+                 derivative_type='none',
+                 reset_type='random',
+                 reward_type='linear',
+                 deriv_action_max=10,
+                 first_deriv_max=10,  # used only with second derivative control
+                 vel_penalty=0,
+                 obs_history=1,
+                 actuation_sync_period=1,
+                 episode_length_time=None,
+                 episode_length_step=None,
+                 rllab_box = False,
+                 servoj_t=ur_utils.COMMANDS['SERVOJ']['default']['t'],
+                 servoj_gain=ur_utils.COMMANDS['SERVOJ']['default']['gain'],
+                 speedj_a=ur_utils.COMMANDS['SPEEDJ']['default']['a'],
+                 speedj_t_min=ur_utils.COMMANDS['SPEEDJ']['default']['t_min'],
+                 movej_t=2, # used for resetting
+                 accel_max=None,
+                 speed_max=None,
+                 dt=0.008,
+                 delay=0.0,  # to simulate extra delay in the system
+                 move_shape='circle', # circle or line
+                 move_vel=0.1, # velocity of moving point in m/s
+                 line_midpoint=[0, 0, 0],
+                 line_length=0.5,
+                 circle_radius=0.3,
+                 **kwargs):
+        
+        assert(move_shape == 'circle' or move_shape == 'line')
+        assert(line_midpoint.length() == 3)
+        assert(line_length > 0)
+        assert(circle_radius > 0)
+        self._move_shape = move_shape
+        self._move_vel = move_vel
+        self._line_midpoint_ = line_midpoint
+        self._line_length_ = line_length
+        self._circle_radius_ = circle_radius
+
+        if(move_shape == 'circle'):
+            self._move_generator_ = self._circle_generator_()
+        else if(move_shape == 'line'):
+            self._move_generator_ = self._line_generator()
+
+        super(MovingPointEnv, self).__init__(setup=setup,
+                                         host=host,
+                                         dof=dof,
+                                         control_type=control_type,
+                                         derivative_type=derivative_type,
+                                         target_type='position',
+                                         reset_type=reset_type,
+                                         reward_type=reward_type,
+                                         deriv_action_max=deriv_action_max,
+                                         first_deriv_max=first_deriv_max,  # used only with second derivative control
+                                         vel_penalty=vel_penalty,
+                                         obs_history=obs_history,
+                                         actuation_sync_period=actuation_sync_period,
+                                         episode_length_time=episode_length_time,
+                                         episode_length_step=episode_length_step,
+                                         rllab_box = rllab_box,
+                                         servoj_t=servoj_t,
+                                         servoj_gain=servoj_gain,
+                                         speedj_a=speedj_a,
+                                         speedj_t_min=speedj_t_min,
+                                         movej_t=movej_t, # used for resetting
+                                         accel_max=accel_max,
+                                         speed_max=speed_max,
+                                         dt=dt,
+                                         delay=delay,  # to simulate extra delay in the system
+                                         **kwargs)
+
+
+    # overrides step function in RTRLBaseEnv to allow for update of target each step
+    def step(self, action):
+        """Optional step function for OpenAI Gym compatibility.
+
+        Returns: a tuple (observation, reward,  {} ('info', for gym compatibility))
+        """
+        # Set the desired action
+        self.act(action)
+        # Update target
+        self._x_target_ = _move_generator_.__next__()
+        # Wait for one time-step
+        next_obs, reward, done = self.sense_wait()
+        return next_obs, reward, done, {}
+
+    def _line_generator_(self):
+        
+
+    def _reset_(self):
+        """Resets the environment episode.
+
+        Moves the arm to either fixed reference or random position and
+        generates a new target from _target_generator_.
+        """
+        print("Resetting")
+        if(self._move_shape_ == 'circle'):
+            x_target = self._end_effector_high - self._end_effector_low + np.array([self._circle_radius_, 0, 0])
+        else if(self._move_shape_ == 'line'):
+            x_target = self._end_effector_high - self._end_effector_low + np.array(self._line_midpoint_)
+        np.copyto(self._x_target_, x_target)
+        self._target_ = self._x_target_[self._end_effector_indices]
+
+        self._action_ = self._rand_obj_.uniform(self._action_low, self._action_high)
+        self._cmd_prev_ = np.zeros(len(self._action_low))  # to be used with derivative control of velocity
+        if self._reset_type != 'none':
+            if self._reset_type == 'random':
+                reset_angles, _ = self._pick_random_angles_()
+            elif self._reset_type == 'zero':
+                reset_angles = self._q_ref[self._joint_indices]
+            self._reset_arm(reset_angles)
+
+        rand_state_array_type, rand_state_array_size, rand_state_array = utils.get_random_state_array(
+            self._rand_obj_.get_state()
+        )
+        np.copyto(self._shared_rstate_array_, np.frombuffer(rand_state_array, dtype=rand_state_array_type))
+
+        print("Reset done")
+
 
 def plot_ur5_reacher(env, batch_size, shared_returns, plot_running):
     """Helper process for visualize the tasks and episodic returns.
@@ -413,4 +540,4 @@ def plot_ur5_reacher(env, batch_size, shared_returns, plot_running):
 
 
 if __name__ == '__main__':
-    run_grid_test()
+    run_grid_test(10, 10, 10, 3, 'saved_policies/trpo01/trpo01')

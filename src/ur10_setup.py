@@ -10,7 +10,7 @@ import numpy as np
 setups = {
     'UR10_6dof':
               {
-                  'host': '192.168.1.103',  # put UR5 Controller address here
+                  'host': '192.168.1.110',  # put UR5 Controller address here
                   #TODO: Update bounding box positions and angles based on UR10
                   'end_effector_low': np.array([-0.5, -0.7, 0.3]), # lower box bounding point - 100, 200, 300
                   'end_effector_high': np.array([-0.1, -0.2, 0.9]),  # upper box bounding point - 500, 700, 900

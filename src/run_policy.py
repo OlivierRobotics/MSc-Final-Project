@@ -200,6 +200,7 @@ def run_policy(*,
         'out of max_iters, total_timesteps, and max_episodes only one should be specified'
 
     while True:
+        target = env._x_target_
         if callback: callback(locals(), globals())
         if total_timesteps and timesteps_so_far >= total_timesteps:
             break
