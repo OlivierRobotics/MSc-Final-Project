@@ -356,6 +356,7 @@ class MovingPointEnv(ReacherEnv):
                  move_vel=0.1, # velocity of moving point in m/s
                  line_midpoint=[0, 0, 0],
                  line_length=0.5,
+                 line_dir='x', # direction for line to move in
                  circle_radius=0.3,
                  **kwargs):
         
@@ -363,11 +364,19 @@ class MovingPointEnv(ReacherEnv):
         assert(line_midpoint.length() == 3)
         assert(line_length > 0)
         assert(circle_radius > 0)
-        self._move_shape = move_shape
-        self._move_vel = move_vel
-        self._line_midpoint_ = line_midpoint
+        self._move_shape_ = move_shape
+        self._move_vel_ = move_vel
         self._line_length_ = line_length
         self._circle_radius_ = circle_radius
+
+        dirs = {
+            'x': 0,
+            'y': 1,
+            'z': 2
+        }
+
+        self._line_dir_ = dirs.get(line_dir)
+
 
         if(move_shape == 'circle'):
             self._move_generator_ = self._circle_generator_()
@@ -401,6 +410,8 @@ class MovingPointEnv(ReacherEnv):
                                          delay=delay,  # to simulate extra delay in the system
                                          **kwargs)
 
+        self._line_midpoint_ = self._end_effector_high - self._end_effector_low + np.array(self._line_midpoint_)
+
 
     # overrides step function in RTRLBaseEnv to allow for update of target each step
     def step(self, action):
@@ -417,6 +428,21 @@ class MovingPointEnv(ReacherEnv):
         return next_obs, reward, done, {}
 
     def _line_generator_(self):
+        point = self._line_midpoint_
+        direction = 1
+        yield point
+        while(True):
+            point[self._line_dir_] += self._move_vel_ * direction * self._dt_
+            if(abs(point[self._line_dir_]) - self._line_midpoint_[self._line_dir_] > self._line_length_/2):
+                point[self._line_dir_] -= (direction * point[self._line_dir_] 
+                    - self._line_midpint_[self._line_dir_] - self._line_length_/2)
+                direction *= -1
+            yield point
+
+    def _circle_generator_(self):
+        
+
+
         
 
     def _reset_(self):
