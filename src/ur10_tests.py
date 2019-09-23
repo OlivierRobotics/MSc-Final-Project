@@ -8,7 +8,7 @@ import numpy as np
 import sys
 
 import baselines.common.tf_util as U
-from multiprocessing import Process, Value, Manager
+from multiprocessing import Process, Value, Manager, Queue
 from baselines.trpo_mpi.trpo_mpi import learn
 from baselines.ppo1.mlp_policy import MlpPolicy
 
@@ -28,6 +28,8 @@ from senseact import utils
 
 import builtins
 import csv
+
+import os
 
 # an environment that allows points to be selected on a x_points x y_points x z _points grid within the end effector bounds and tests each point num_test times
 class GridTestEnv(ReacherEnv):
@@ -221,7 +223,7 @@ def run_grid_test(x_points, y_points, z_points, num_test, policy_path):
     builtins.shared_returns = shared_returns
 
     # Spawn plotting process
-    pp = Process(target=plot_ur5_reacher, args=(env, 2048, shared_returns, plot_running))
+    pp = Process(target=plot_ur5_reacher, args=(env, timesteps_per_batch, shared_returns, plot_running))
     pp.start()
 
     # Run TRPO policy
@@ -353,15 +355,16 @@ class MovingPointEnv(ReacherEnv):
                  dt=0.008,
                  delay=0.0,  # to simulate extra delay in the system
                  move_shape='circle', # circle or line
-                 move_vel=0.1, # velocity of moving point in m/s
+                 move_vel=0.1, # velocity of moving point in m/s or rad/s
                  line_midpoint=[0, 0, 0],
                  line_length=0.5,
                  line_dir='x', # direction for line to move in
                  circle_radius=0.3,
+                 circle_plane='xy', # plane which circle is on (xy, yz, xz)
                  **kwargs):
         
         assert(move_shape == 'circle' or move_shape == 'line')
-        assert(line_midpoint.length() == 3)
+        assert(len(line_midpoint) == 3)
         assert(line_length > 0)
         assert(circle_radius > 0)
         self._move_shape_ = move_shape
@@ -375,13 +378,20 @@ class MovingPointEnv(ReacherEnv):
             'z': 2
         }
 
-        self._line_dir_ = dirs.get(line_dir)
+        planes = {
+            'xy': 2,
+            'xz': 1,
+            'yz': 0
+        }
+
+        self._line_dir_ =  dirs.get(line_dir)
+        self._circle_plane_ = planes.get(circle_plane)
 
 
         if(move_shape == 'circle'):
-            self._move_generator_ = self._circle_generator_()
-        else if(move_shape == 'line'):
-            self._move_generator_ = self._line_generator()
+            self._move_generator_ = self._circle_generator_(self._circle_plane_)
+        elif(move_shape == 'line'):
+            self._move_generator_ = self._line_generator_(self._line_dir_)
 
         super(MovingPointEnv, self).__init__(setup=setup,
                                          host=host,
@@ -410,8 +420,38 @@ class MovingPointEnv(ReacherEnv):
                                          delay=delay,  # to simulate extra delay in the system
                                          **kwargs)
 
-        self._line_midpoint_ = self._end_effector_high - self._end_effector_low + np.array(self._line_midpoint_)
+        self._target_queue_ = Queue()
 
+        self._line_midpoint_ = (self._end_effector_high + self._end_effector_low)/2 + np.array(line_midpoint)
+
+
+        circle_rel_startpoint = np.zeros(3)
+        circle_rel_startpoint[self._circle_plane_] += self._circle_radius_
+        self._circle_startpoint_ = (self._end_effector_high + self._end_effector_low)/2 + circle_rel_startpoint
+
+    # overrides start() in rtrl_base_env to allow for queue in process/thread
+    def start(self):
+        """Starts all manager threads and communicator processes."""
+        self._running = True
+        # Start the communicator process
+        for comm in self._all_comms.values():
+            comm.start()
+
+        time.sleep(0.5)  # let the communicator buffer have some packets
+
+        self._new_obs_time = time.time()
+
+        # Create a process/thread to read and write to all communicators
+        if self._run_mode == 'multithread':
+            # multithread case we don't need the check, but assigning here
+            # to keep the polling loop the same
+            self._parent_pid = os.getppid()
+            self._polling_loop = Thread(target=self._run_loop_, args=(self._target_queue_, ))
+            self._polling_loop.start()
+        elif self._run_mode == 'multiprocess':
+            self._parent_pid = os.getpid()
+            self._polling_loop = Process(target=self._run_loop_, args=(self._target_queue_, ))
+            self._polling_loop.start()
 
     # overrides step function in RTRLBaseEnv to allow for update of target each step
     def step(self, action):
@@ -422,40 +462,49 @@ class MovingPointEnv(ReacherEnv):
         # Set the desired action
         self.act(action)
         # Update target
-        self._x_target_ = _move_generator_.__next__()
+        self._x_target_ = self._move_generator_.__next__()
+        self._target_queue_.put(self._x_target_)
+        #print(self._target_)
         # Wait for one time-step
         next_obs, reward, done = self.sense_wait()
         return next_obs, reward, done, {}
 
-    def _line_generator_(self):
+    def _line_generator_(self, line_dir):
         point = self._line_midpoint_
         direction = 1
         yield point
         while(True):
-            point[self._line_dir_] += self._move_vel_ * direction * self._dt_
-            if(abs(point[self._line_dir_]) - self._line_midpoint_[self._line_dir_] > self._line_length_/2):
-                point[self._line_dir_] -= (direction * point[self._line_dir_] 
-                    - self._line_midpint_[self._line_dir_] - self._line_length_/2)
+            point[line_dir] += self._move_vel_ * direction * self._dt
+            if(abs(point[line_dir]) - self._line_midpoint_[line_dir] > self._line_length_/2):
+                point[line_dir] -= (direction * point[line_dir] 
+                    - self._line_midpoint_[line_dir] - self._line_length_/2)
                 direction *= -1
             yield point
 
-    def _circle_generator_(self):
-        
-
-
-        
+    def _circle_generator_(self, plane):
+        point = self._circle_startpoint_
+        theta = 0
+        yield point
+        while(True):
+            theta += self._move_vel_ * self._dt
+            if(theta > np.pi):
+                theta -= np.pi
+            point[self._circle_plane_-2] = np.cos(theta) * self._circle_radius_
+            point[self._circle_plane_-1] = np.sin(theta) * self._circle_radius_
+            yield point
 
     def _reset_(self):
         """Resets the environment episode.
 
-        Moves the arm to either fixed reference or random position and
-        generates a new target from _target_generator_.
+        Moves the arm to either fixed reference or random position and resets targets and target generators
         """
         print("Resetting")
         if(self._move_shape_ == 'circle'):
-            x_target = self._end_effector_high - self._end_effector_low + np.array([self._circle_radius_, 0, 0])
-        else if(self._move_shape_ == 'line'):
-            x_target = self._end_effector_high - self._end_effector_low + np.array(self._line_midpoint_)
+            x_target = self._circle_startpoint_
+            self._move_generator_ = self._circle_generator_(self._circle_plane_)            
+        elif(self._move_shape_ == 'line'):
+            x_target = self._line_midpoint_
+            self._move_generator_ = self._line_generator_(self._line_dir_)
         np.copyto(self._x_target_, x_target)
         self._target_ = self._x_target_[self._end_effector_indices]
 
@@ -475,6 +524,150 @@ class MovingPointEnv(ReacherEnv):
 
         print("Reset done")
 
+    # overrides _run_loop_ in rtrl_base_env to allow for queue to send new targets into process
+    def _run_loop_(self, q):
+        """Main manager method for multithread and multiprocess modes.
+
+        In multithread or multiprocess run mode, this method manages the passing
+        of information from sensor communicators to observation, _reward_, and done buffer
+        as well as from the action buffer to the actuation communicators.
+        In singlethread run mode, this method is not called and the passing of information
+        is handled by `sense` and `act`.
+        """
+        while self._running:
+            # XXX on windows the parent pid stay the same even after the parent process
+            # has been killed, so this only works on Linux-based OS; possible alternative
+            # would be to establish a socket between to allow checking if the connection
+            # is alive.
+            if os.getppid() != self._parent_pid:
+                logging.info("Main environment process has been closed, shutting down polling loop.")
+                return
+
+            if self._reset_flag.value:
+                # Perform reset procedure defined by the environment class.
+                self._reset_()
+                # Signal that the reset is complete.
+                # The `reset` function in the main thread may block on this flag
+                self._reset_flag.value = 0
+            if not q.empty():
+                self._target_ = q.get()
+                np.copyto(self._x_target_, self._target_)
+            self._sensor_to_sensation_()
+            self._action_to_actuator_()
+            start = time.time()
+            if self._busy_loop:
+                while time.time() - start < self._sleep_time:
+                    continue
+            else:
+                time.sleep(self._sleep_time)
+
+def moving_point_callback(locals, globals):
+    shared_returns = globals['__builtins__']['shared_returns']
+    if locals['iters_so_far'] > 0:
+        ep_rets = locals['seg']['ep_rets']
+        ep_lens = locals['seg']['ep_lens']
+        shape = locals['env']._move_shape_        
+
+        if len(ep_rets):
+            if not shared_returns is None:
+                shared_returns['write_lock'] = True
+                shared_returns['episodic_returns'] += ep_rets
+                shared_returns['episodic_lengths'] += ep_lens
+                shared_returns['write_lock'] = False
+                with open('experiment_data/gridtest.csv', 'a', newline='') as csvfile:
+                    csvwriter = csv.writer(csvfile)
+                    vel = locals['env']._move_vel_
+                    if(shape == 'circle'):
+                        radius = locals['env']._circle_radius_
+                        plane = locals['env']._circle_plane_
+                        row = [np.mean(ep_rets), shape, vel, radius, plane]
+                    
+                    elif(shape == 'line'):
+                        midpoint = locals['env']._line_midpoint_
+                        direction = locals['env']._line_dir_
+                        length = locals['env']._line_length_
+                        row = [np.mean(ep_rets), shape, vel, direction, length, *midpoint]
+
+                    csvwriter.writerow(row)
+
+def simple_line_test(num_eps, num_iters, policy_path):
+    # use fixed random state
+    rand_state = np.random.RandomState(1).get_state()
+    np.random.set_state(rand_state)
+    tf_set_seeds(np.random.randint(1, 2**31 - 1))
+
+    # set up coordination between eps per iteration and num_test
+    episode_length_time = 16.0
+    dt = 0.04
+    timesteps_per_ep = episode_length_time / dt
+    timesteps_per_iter = int(timesteps_per_ep * num_eps)
+    timesteps_total = int(timesteps_per_iter * num_iters)
+
+
+    # Create GridTest environment
+    env = MovingPointEnv(
+            setup="UR10_6dof",
+            host=None,
+            dof=6,
+            control_type="velocity",
+            reset_type="zero",
+            reward_type="precision",
+            derivative_type="none",
+            deriv_action_max=5,
+            first_deriv_max=2,
+            accel_max=1.4, # was 1.4
+            speed_max=0.3, # was 0.3
+            speedj_a=1.4,
+            episode_length_time=episode_length_time,
+            episode_length_step=None,
+            actuation_sync_period=1,
+            dt=dt,
+            run_mode="multiprocess",
+            rllab_box=False,
+            movej_t=2.0,
+            delay=0.0,
+            random_state=rand_state,
+            move_shape='line',
+            move_vel=0.03, # velocity of moving point in m/s or rad/s
+            line_midpoint=[0, 0.2, 0],
+            line_length=0.5,
+            line_dir='x' # direction for line to move in
+        )
+    env = NormalizedEnv(env)
+    # Start environment processes
+    env.start()
+    # Create baselines TRPO policy function
+    sess = U.single_threaded_session()
+    sess.__enter__()
+
+    # Create and start plotting process
+    plot_running = Value('i', 1)
+    shared_returns = Manager().dict({"write_lock": False,
+                                     "episodic_returns": [],
+                                     "episodic_lengths": [], })
+    builtins.shared_returns = shared_returns
+
+    # Spawn plotting process
+    pp = Process(target=plot_ur5_reacher, args=(env, timesteps_per_iter, shared_returns, plot_running))
+    pp.start()
+
+    # Run TRPO policy
+    run_policy(network='mlp', 
+          num_layers=2, # these are network_kwargs for the MLP network
+          num_hidden=64,
+          env=env, 
+          total_timesteps=timesteps_total, #Originally 200,000
+          timesteps_per_batch=timesteps_per_iter,
+          callback=moving_point_callback,
+          load_path=policy_path
+          )
+
+    # Safely terminate plotter process
+    plot_running.value = 0  # shutdown plotting process
+    time.sleep(2)
+    pp.join()
+
+    env.close()
 
 def plot_ur5_reacher(env, batch_size, shared_returns, plot_running):
     """Helper process for visualize the tasks and episodic returns.
@@ -566,4 +759,5 @@ def plot_ur5_reacher(env, batch_size, shared_returns, plot_running):
 
 
 if __name__ == '__main__':
-    run_grid_test(10, 10, 10, 3, 'saved_policies/trpo01/trpo01')
+    #run_grid_test(10, 10, 10, 3, 'saved_policies/trpo01/trpo01')
+    simple_line_test(5, 5, 'saved_policies/trpo01/trpo01')
