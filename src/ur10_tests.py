@@ -373,15 +373,15 @@ class MovingPointEnv(ReacherEnv):
         self._circle_radius_ = circle_radius
 
         dirs = {
-            'x': 0,
+            'x': 2,
             'y': 1,
-            'z': 2
+            'z': 0
         }
 
         planes = {
-            'xy': 2,
+            'xy': 0,
             'xz': 1,
-            'yz': 0
+            'yz': 2
         }
 
         self._line_dir_ =  dirs.get(line_dir)
@@ -470,27 +470,28 @@ class MovingPointEnv(ReacherEnv):
         return next_obs, reward, done, {}
 
     def _line_generator_(self, line_dir):
-        point = self._line_midpoint_
+        point = np.zeros(3)
+        np.copyto(point, self._line_midpoint_)
         direction = 1
         yield point
         while(True):
             point[line_dir] += self._move_vel_ * direction * self._dt
-            if(abs(point[line_dir]) - self._line_midpoint_[line_dir] > self._line_length_/2):
-                point[line_dir] -= (direction * point[line_dir] 
-                    - self._line_midpoint_[line_dir] - self._line_length_/2)
+            if(abs(point[line_dir] - self._line_midpoint_[line_dir]) > self._line_length_/2):
+                point[line_dir] -= 2*(point[line_dir] - self._line_midpoint_[line_dir] - direction * self._line_length_/2)
                 direction *= -1
             yield point
 
     def _circle_generator_(self, plane):
-        point = self._circle_startpoint_
+        point = np.zeros(3)
+        np.copyto(point, self._circle_startpoint_)
         theta = 0
         yield point
         while(True):
             theta += self._move_vel_ * self._dt
-            if(theta > np.pi):
-                theta -= np.pi
-            point[self._circle_plane_-2] = np.cos(theta) * self._circle_radius_
-            point[self._circle_plane_-1] = np.sin(theta) * self._circle_radius_
+            if(theta > 2*np.pi):
+                theta -= 2*np.pi
+            point[self._circle_plane_-2] = np.cos(theta) * self._circle_radius_ + self._circle_startpoint_[self._circle_plane_-2]
+            point[self._circle_plane_-1] = np.sin(theta) * self._circle_radius_ + self._circle_startpoint_[self._circle_plane_-1]
             yield point
 
     def _reset_(self):
@@ -561,43 +562,48 @@ class MovingPointEnv(ReacherEnv):
             else:
                 time.sleep(self._sleep_time)
 
-def moving_point_callback(locals, globals):
-    shared_returns = globals['__builtins__']['shared_returns']
-    if locals['iters_so_far'] > 0:
-        ep_rets = locals['seg']['ep_rets']
-        ep_lens = locals['seg']['ep_lens']
-        shape = locals['env']._move_shape_        
+def create_moving_point_callback(shared_returns, csv_path):
+    builtins.shared_returns = shared_returns
+    def moving_point_callback(locals, globals):
+        shared_returns = globals['__builtins__']['shared_returns']
+        if locals['iters_so_far'] > 0:
+            ep_rets = locals['seg']['ep_rets']
+            ep_lens = locals['seg']['ep_lens']
+            shape = locals['env']._move_shape_        
 
-        if len(ep_rets):
-            if not shared_returns is None:
-                shared_returns['write_lock'] = True
-                shared_returns['episodic_returns'] += ep_rets
-                shared_returns['episodic_lengths'] += ep_lens
-                shared_returns['write_lock'] = False
-                with open('experiment_data/gridtest.csv', 'a', newline='') as csvfile:
-                    csvwriter = csv.writer(csvfile)
-                    vel = locals['env']._move_vel_
-                    if(shape == 'circle'):
-                        radius = locals['env']._circle_radius_
-                        plane = locals['env']._circle_plane_
-                        row = [np.mean(ep_rets), shape, vel, radius, plane]
-                    
-                    elif(shape == 'line'):
-                        midpoint = locals['env']._line_midpoint_
-                        direction = locals['env']._line_dir_
-                        length = locals['env']._line_length_
-                        row = [np.mean(ep_rets), shape, vel, direction, length, *midpoint]
+            if len(ep_rets):
+                if not shared_returns is None:
+                    shared_returns['write_lock'] = True
+                    shared_returns['episodic_returns'] += ep_rets
+                    shared_returns['episodic_lengths'] += ep_lens
+                    shared_returns['write_lock'] = False
+                    with open(csv_path, 'a', newline='') as csvfile:
+                        print('writing to ' + csv_path)
+                        csvwriter = csv.writer(csvfile)
+                        vel = locals['env']._move_vel_
+                        if(shape == 'circle'):
+                            radius = locals['env']._circle_radius_
+                            plane = locals['env']._circle_plane_
+                            row = [np.mean(ep_rets), shape, vel, radius, plane]
+                        
+                        elif(shape == 'line'):
+                            midpoint = locals['env']._line_midpoint_
+                            direction = locals['env']._line_dir_
+                            length = locals['env']._line_length_
+                            row = [np.mean(ep_rets), shape, vel, direction, length, *midpoint]
 
-                    csvwriter.writerow(row)
+                        csvwriter.writerow(row)
 
-def simple_line_test(num_eps, num_iters, policy_path):
+    return moving_point_callback
+
+def simple_line_test(num_eps, num_iters, policy_path, csv_path, move_vel=0.03, midpoint=[0, 0, 0], length=0.3, direction='x'):
     # use fixed random state
     rand_state = np.random.RandomState(1).get_state()
     np.random.set_state(rand_state)
     tf_set_seeds(np.random.randint(1, 2**31 - 1))
 
     # set up coordination between eps per iteration and num_test
-    episode_length_time = 16.0
+    episode_length_time = 2*length / move_vel
     dt = 0.04
     timesteps_per_ep = episode_length_time / dt
     timesteps_per_iter = int(timesteps_per_ep * num_eps)
@@ -628,10 +634,10 @@ def simple_line_test(num_eps, num_iters, policy_path):
             delay=0.0,
             random_state=rand_state,
             move_shape='line',
-            move_vel=0.03, # velocity of moving point in m/s or rad/s
-            line_midpoint=[0, 0.2, 0],
-            line_length=0.5,
-            line_dir='x' # direction for line to move in
+            move_vel=move_vel, # velocity of moving point in m/s or rad/s
+            line_midpoint=midpoint,
+            line_length=length,
+            line_dir=direction # direction for line to move in
         )
     env = NormalizedEnv(env)
     # Start environment processes
@@ -647,6 +653,8 @@ def simple_line_test(num_eps, num_iters, policy_path):
                                      "episodic_lengths": [], })
     builtins.shared_returns = shared_returns
 
+    callback = create_moving_point_callback(shared_returns, csv_path)
+
     # Spawn plotting process
     pp = Process(target=plot_ur5_reacher, args=(env, timesteps_per_iter, shared_returns, plot_running))
     pp.start()
@@ -658,7 +666,7 @@ def simple_line_test(num_eps, num_iters, policy_path):
           env=env, 
           total_timesteps=timesteps_total, #Originally 200,000
           timesteps_per_batch=timesteps_per_iter,
-          callback=moving_point_callback,
+          callback=callback,
           load_path=policy_path
           )
 
@@ -668,6 +676,92 @@ def simple_line_test(num_eps, num_iters, policy_path):
     pp.join()
 
     env.close()
+
+def simple_circle_test(num_eps, num_iters, policy_path, csv_path, move_vel=0.5, radius=0.15, plane='xy'):
+    # use fixed random state
+    rand_state = np.random.RandomState(1).get_state()
+    np.random.set_state(rand_state)
+    tf_set_seeds(np.random.randint(1, 2**31 - 1))
+
+    # set up coordination between eps per iteration and num_test
+    episode_length_time = 2*np.pi / move_vel #each ep is one full rotation of the circle
+    dt = 0.04
+    timesteps_per_ep = int(episode_length_time / dt)
+    timesteps_per_iter = int(timesteps_per_ep * num_eps)
+    timesteps_total = int(timesteps_per_iter * num_iters)
+
+
+    # Create GridTest environment
+    env = MovingPointEnv(
+            setup="UR10_6dof",
+            host=None,
+            dof=6,
+            control_type="velocity",
+            reset_type="zero",
+            reward_type="precision",
+            derivative_type="none",
+            deriv_action_max=5,
+            first_deriv_max=2,
+            accel_max=1.4, # was 1.4
+            speed_max=0.3, # was 0.3
+            speedj_a=1.4,
+            episode_length_time=episode_length_time,
+            episode_length_step=None,
+            actuation_sync_period=1,
+            dt=dt,
+            run_mode="multiprocess",
+            rllab_box=False,
+            movej_t=2.0,
+            delay=0.0,
+            random_state=rand_state,
+            move_shape='circle', # circle or line
+            move_vel=move_vel, # velocity of moving point in m/s or rad/s
+            circle_radius=radius,
+            circle_plane=plane, # plane which circle is on (xy, yz, xz)
+        )
+    env = NormalizedEnv(env)
+    # Start environment processes
+    env.start()
+    # Create baselines TRPO policy function
+    sess = U.single_threaded_session()
+    sess.__enter__()
+
+    # Create and start plotting process
+    plot_running = Value('i', 1)
+    shared_returns = Manager().dict({"write_lock": False,
+                                     "episodic_returns": [],
+                                     "episodic_lengths": [], })
+    builtins.shared_returns = shared_returns
+
+    callback = create_moving_point_callback(shared_returns, csv_path)
+
+    # Spawn plotting process
+    pp = Process(target=plot_ur5_reacher, args=(env, timesteps_per_iter, shared_returns, plot_running))
+    pp.start()
+
+    # Run TRPO policy
+    run_policy(network='mlp', 
+          num_layers=2, # these are network_kwargs for the MLP network
+          num_hidden=64,
+          env=env, 
+          total_timesteps=timesteps_total, #Originally 200,000
+          timesteps_per_batch=timesteps_per_iter,
+          callback=callback,
+          load_path=policy_path
+          )
+
+    # Safely terminate plotter process
+    plot_running.value = 0  # shutdown plotting process
+    time.sleep(2)
+    pp.join()
+
+    env.close()
+
+def line_test_suite():
+    for i in range()
+
+def circle_test_suit():
+
 
 def plot_ur5_reacher(env, batch_size, shared_returns, plot_running):
     """Helper process for visualize the tasks and episodic returns.
@@ -760,4 +854,5 @@ def plot_ur5_reacher(env, batch_size, shared_returns, plot_running):
 
 if __name__ == '__main__':
     #run_grid_test(10, 10, 10, 3, 'saved_policies/trpo01/trpo01')
-    simple_line_test(5, 5, 'saved_policies/trpo01/trpo01')
+    simple_circle_test(5, 5, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_test.csv')
+    #simple_line_test(2, 2, 'saved_policies/trpo01/trpo01', 'experiment_data/simple_line_test.csv', direction='x')
