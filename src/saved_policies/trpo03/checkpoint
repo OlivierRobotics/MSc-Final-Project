@@ -1,0 +1,2 @@
+model_checkpoint_path: "trpo03"
+all_model_checkpoint_paths: "trpo03"

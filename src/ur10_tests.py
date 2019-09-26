@@ -161,7 +161,7 @@ def grid_test_callback(locals, globals):
                 shared_returns['episodic_returns'] += ep_rets
                 shared_returns['episodic_lengths'] += ep_lens
                 shared_returns['write_lock'] = False
-                with open('experiment_data/gridtest.csv', 'a', newline='') as csvfile:
+                with open('experiment_data/gridtest_trpo01.csv', 'a', newline='') as csvfile:
                     csvwriter = csv.writer(csvfile)
                     row = [np.mean(ep_rets), *target]
                     csvwriter.writerow(row)
@@ -757,10 +757,10 @@ def simple_circle_test(num_eps, num_iters, policy_path, csv_path, move_vel=0.5, 
 
     env.close()
 
-def line_test_suite():
-    for i in range()
+#def line_test_suite():
+    #for i in range()
 
-def circle_test_suit():
+#def circle_test_suit():
 
 
 def plot_ur5_reacher(env, batch_size, shared_returns, plot_running):
@@ -853,6 +853,6 @@ def plot_ur5_reacher(env, batch_size, shared_returns, plot_running):
 
 
 if __name__ == '__main__':
-    #run_grid_test(10, 10, 10, 3, 'saved_policies/trpo01/trpo01')
-    simple_circle_test(5, 5, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_test.csv')
+    run_grid_test(5, 5, 5, 5, 'saved_policies/trpo01/trpo01')
+    #simple_circle_test(5, 5, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_test.csv')
     #simple_line_test(2, 2, 'saved_policies/trpo01/trpo01', 'experiment_data/simple_line_test.csv', direction='x')
