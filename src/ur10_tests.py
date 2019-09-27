@@ -147,6 +147,8 @@ class GridTestEnv(ReacherEnv):
                     for test in range(self._num_test):
                         yield x_points[x], y_points[y], z_points[z]
 
+        yield 0, 0, 0 # just here so that final callback can happen without program crashing
+
 # callback to use for logging 
 def grid_test_callback(locals, globals):
     shared_returns = globals['__builtins__']['shared_returns']
@@ -161,7 +163,7 @@ def grid_test_callback(locals, globals):
                 shared_returns['episodic_returns'] += ep_rets
                 shared_returns['episodic_lengths'] += ep_lens
                 shared_returns['write_lock'] = False
-                with open('experiment_data/gridtest_trpo01.csv', 'a', newline='') as csvfile:
+                with open('experiment_data/gridtest_trpo02.csv', 'a', newline='') as csvfile:
                     csvwriter = csv.writer(csvfile)
                     row = [np.mean(ep_rets), *target]
                     csvwriter.writerow(row)
@@ -177,7 +179,8 @@ def run_grid_test(x_points, y_points, z_points, num_test, policy_path):
     episode_length_time = 4.0
     dt = 0.04
     timesteps_per_ep = episode_length_time / dt
-    timesteps_per_batch = int(timesteps_per_ep * num_test) # small extra time just in case
+    timesteps_per_batch = int(timesteps_per_ep * num_test)
+    total_timesteps = timesteps_per_batch * x_points * y_points * z_points
 
 
     # Create GridTest environment
@@ -231,7 +234,7 @@ def run_grid_test(x_points, y_points, z_points, num_test, policy_path):
           num_layers=2, # these are network_kwargs for the MLP network
           num_hidden=64,
           env=env, 
-          total_timesteps=50000, #Originally 200,000
+          total_timesteps=total_timesteps, #Originally 200,000
           timesteps_per_batch=timesteps_per_batch,
           callback=grid_test_callback,
           load_path=policy_path
@@ -757,10 +760,96 @@ def simple_circle_test(num_eps, num_iters, policy_path, csv_path, move_vel=0.5, 
 
     env.close()
 
-#def line_test_suite():
-    #for i in range()
+def line_test_suite():
+    lengths = np.array([-0.1, -0.2, 0.9]) - np.array([-0.5, -0.7, 0.3]) # end_effector_high - end_effector_low
+    for direction, dir_num in zip(['x', 'y', 'z'], [0, 1, 2]):
+        for mid_coord in [-1/4, 0, 1/4]:
+            midpoint = np.zeros(3)
+            midpoint[dir_num] += lengths[dir_num] * mid_coord
+            simple_line_test(2, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/line_tests_trpo01.csv', midpoint=midpoint, direction=direction)
+            time.sleep(5)
 
-#def circle_test_suit():
+
+def circle_test_suite():
+    for plane in ['xy', 'yz', 'xz']:
+        for radius in [0.10, 0.15, 0.20]:
+            simple_circle_test(2, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_tests_trpo01.csv', plane=plane, radius=radius)
+
+def normal_test():
+    # use fixed random state
+    rand_state = np.random.RandomState(1).get_state()
+    np.random.set_state(rand_state)
+    tf_set_seeds(np.random.randint(1, 2**31 - 1))
+
+    # Create UR5 Reacher2D environment
+    env = ReacherEnv(
+            setup="UR10_6dof",
+            host=None,
+            dof=6,
+            control_type="velocity",
+            target_type="position",
+            reset_type="none",
+            reward_type="precision",
+            derivative_type="none",
+            deriv_action_max=5,
+            first_deriv_max=2,
+            accel_max=1.4, # was 1.4
+            speed_max=0.3, # was 0.3
+            speedj_a=1.4,
+            episode_length_time=4.0,
+            episode_length_step=None,
+            actuation_sync_period=1,
+            dt=0.04,
+            run_mode="multiprocess",
+            rllab_box=False,
+            movej_t=2.0,
+            delay=0.0,
+            random_state=rand_state
+        )
+    env = NormalizedEnv(env)
+    # Start environment processes
+    env.start()
+    # Create baselines TRPO policy function
+    sess = U.single_threaded_session()
+    sess.__enter__()
+
+    # Load previously trained model if it exists
+
+
+    # No longer needed
+    """def policy_fn(name, ob_space, ac_space):
+        return MlpPolicy(name=name, ob_space=ob_space, ac_space=ac_space,
+            hid_size=64, num_hid_layers=2)"""
+
+    # Create and start plotting process
+    plot_running = Value('i', 1)
+    shared_returns = Manager().dict({"write_lock": False,
+                                     "episodic_returns": [],
+                                     "episodic_lengths": [], })
+    # Spawn plotting process
+    pp = Process(target=plot_ur5_reacher, args=(env, 2048, shared_returns, plot_running))
+    pp.start()
+
+    # Create callback function for logging data from baselines TRPO learn
+    kindred_callback = create_callback(shared_returns)
+
+    # Train baselines TRPO
+    run_policy(network='mlp', 
+          num_layers=2, # these are network_kwargs for the MLP network
+          num_hidden=64,
+          env=env, 
+          total_timesteps=10000, #Originally 200,000
+          timesteps_per_batch=2048,
+          callback=kindred_callback,
+          load_path='saved_policies/trpo03/trpo03',
+          )
+
+    # Safely terminate plotter process
+    plot_running.value = 0  # shutdown ploting process
+    time.sleep(2)
+    pp.join()
+
+    env.close()
 
 
 def plot_ur5_reacher(env, batch_size, shared_returns, plot_running):
@@ -853,6 +942,8 @@ def plot_ur5_reacher(env, batch_size, shared_returns, plot_running):
 
 
 if __name__ == '__main__':
-    run_grid_test(5, 5, 5, 5, 'saved_policies/trpo01/trpo01')
-    #simple_circle_test(5, 5, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_test.csv')
+    #run_grid_test(5, 5, 5, 5, 'saved_policies/trpo02/trpo02')
+    #circle_test_suite()
+    #simple_circle_test(2, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_test.csv')
     #simple_line_test(2, 2, 'saved_policies/trpo01/trpo01', 'experiment_data/simple_line_test.csv', direction='x')
+    normal_test()
