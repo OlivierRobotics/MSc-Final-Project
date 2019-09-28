@@ -163,7 +163,7 @@ def grid_test_callback(locals, globals):
                 shared_returns['episodic_returns'] += ep_rets
                 shared_returns['episodic_lengths'] += ep_lens
                 shared_returns['write_lock'] = False
-                with open('experiment_data/gridtest_trpo02.csv', 'a', newline='') as csvfile:
+                with open('experiment_data/gridtest_trpo03.csv', 'a', newline='') as csvfile:
                     csvwriter = csv.writer(csvfile)
                     row = [np.mean(ep_rets), *target]
                     csvwriter.writerow(row)
@@ -375,6 +375,7 @@ class MovingPointEnv(ReacherEnv):
         self._line_length_ = line_length
         self._circle_radius_ = circle_radius
 
+        # Seems like XYZ points are actually denoted [z, y, x]
         dirs = {
             'x': 2,
             'y': 1,
@@ -427,10 +428,7 @@ class MovingPointEnv(ReacherEnv):
 
         self._line_midpoint_ = (self._end_effector_high + self._end_effector_low)/2 + np.array(line_midpoint)
 
-
-        circle_rel_startpoint = np.zeros(3)
-        circle_rel_startpoint[self._circle_plane_] += self._circle_radius_
-        self._circle_startpoint_ = (self._end_effector_high + self._end_effector_low)/2 + circle_rel_startpoint
+        self._circle_centrepoint_ = (self._end_effector_high + self._end_effector_low)/2
 
     # overrides start() in rtrl_base_env to allow for queue in process/thread
     def start(self):
@@ -486,15 +484,17 @@ class MovingPointEnv(ReacherEnv):
 
     def _circle_generator_(self, plane):
         point = np.zeros(3)
-        np.copyto(point, self._circle_startpoint_)
+        np.copyto(point, self._circle_centrepoint_)
+        point[plane-1] += self._circle_radius_
+        print(point)
         theta = 0
         yield point
         while(True):
             theta += self._move_vel_ * self._dt
             if(theta > 2*np.pi):
                 theta -= 2*np.pi
-            point[self._circle_plane_-2] = np.cos(theta) * self._circle_radius_ + self._circle_startpoint_[self._circle_plane_-2]
-            point[self._circle_plane_-1] = np.sin(theta) * self._circle_radius_ + self._circle_startpoint_[self._circle_plane_-1]
+            point[self._circle_plane_-2] = np.cos(theta) * self._circle_radius_ + self._circle_centrepoint_[self._circle_plane_-2]
+            point[self._circle_plane_-1] = np.sin(theta) * self._circle_radius_ + self._circle_centrepoint_[self._circle_plane_-1]
             yield point
 
     def _reset_(self):
@@ -504,7 +504,11 @@ class MovingPointEnv(ReacherEnv):
         """
         print("Resetting")
         if(self._move_shape_ == 'circle'):
-            x_target = self._circle_startpoint_
+            startpoint = np.zeros(3)
+            startpoint[self._circle_plane_-2] += self._circle_radius_ 
+            startpoint += self._circle_centrepoint_
+            x_target = np.zeros(3)
+            np.copyto(x_target, startpoint)
             self._move_generator_ = self._circle_generator_(self._circle_plane_)            
         elif(self._move_shape_ == 'line'):
             x_target = self._line_midpoint_
@@ -760,7 +764,8 @@ def simple_circle_test(num_eps, num_iters, policy_path, csv_path, move_vel=0.5, 
 
     env.close()
 
-def line_test_suite():
+# doesn't work due to issues with clearing variables after each run
+"""def line_test_suite():
     lengths = np.array([-0.1, -0.2, 0.9]) - np.array([-0.5, -0.7, 0.3]) # end_effector_high - end_effector_low
     for direction, dir_num in zip(['x', 'y', 'z'], [0, 1, 2]):
         for mid_coord in [-1/4, 0, 1/4]:
@@ -773,7 +778,7 @@ def line_test_suite():
 def circle_test_suite():
     for plane in ['xy', 'yz', 'xz']:
         for radius in [0.10, 0.15, 0.20]:
-            simple_circle_test(2, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_tests_trpo01.csv', plane=plane, radius=radius)
+            simple_circle_test(2, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_tests_trpo01.csv', plane=plane, radius=radius)"""
 
 def normal_test():
     # use fixed random state
@@ -942,8 +947,28 @@ def plot_ur5_reacher(env, batch_size, shared_returns, plot_running):
 
 
 if __name__ == '__main__':
-    #run_grid_test(5, 5, 5, 5, 'saved_policies/trpo02/trpo02')
-    #circle_test_suite()
-    #simple_circle_test(2, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_test.csv')
-    #simple_line_test(2, 2, 'saved_policies/trpo01/trpo01', 'experiment_data/simple_line_test.csv', direction='x')
-    normal_test()
+    #run_grid_test(5, 5, 5, 5, 'saved_policies/trpo03/trpo03')
+
+
+    #simple_circle_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_tests_trpo01.csv', move_vel=0.5, radius=0.10, plane='xy')
+    #simple_circle_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_tests_trpo01.csv', move_vel=0.5, radius=0.10, plane='yz')
+    #simple_circle_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_tests_trpo01.csv', move_vel=0.5, radius=0.10, plane='xz')
+    #simple_circle_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_tests_trpo01.csv', move_vel=0.5, radius=0.15, plane='xy')
+    #simple_circle_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_tests_trpo01.csv', move_vel=0.5, radius=0.15, plane='yz')
+    #simple_circle_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_tests_trpo01.csv', move_vel=0.5, radius=0.15, plane='xz')
+    #simple_circle_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_tests_trpo01.csv', move_vel=0.5, radius=0.20, plane='xy')
+    #simple_circle_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_tests_trpo01.csv', move_vel=0.5, radius=0.20, plane='yz')
+    #simple_circle_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/circle_tests_trpo01.csv', move_vel=0.5, radius=0.20, plane='xz')
+
+
+    #simple_line_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/line_tests_trpo01.csv', move_vel=0.025, midpoint=[0, 0, 0], length=0.3, direction='x')
+    #simple_line_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/line_tests_trpo01.csv', move_vel=0.05, midpoint=[0, 0, 0], length=0.3, direction='x')
+    #simple_line_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/line_tests_trpo01.csv', move_vel=0.1, midpoint=[0, 0, 0], length=0.3, direction='x')
+    #simple_line_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/line_tests_trpo01.csv', move_vel=0.025, midpoint=[0, 0, 0], length=0.3, direction='y')
+    #simple_line_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/line_tests_trpo01.csv', move_vel=0.05, midpoint=[0, 0, 0], length=0.3, direction='y')
+    #simple_line_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/line_tests_trpo01.csv', move_vel=0.1, midpoint=[0, 0, 0], length=0.3, direction='y')
+    #simple_line_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/line_tests_trpo01.csv', move_vel=0.025, midpoint=[0, 0, 0], length=0.3, direction='z')
+    #simple_line_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/line_tests_trpo01.csv', move_vel=0.05, midpoint=[0, 0, 0], length=0.3, direction='z')
+    simple_line_test(5, 1, 'saved_policies/trpo01/trpo01', 'experiment_data/line_tests_trpo01.csv', move_vel=0.1, midpoint=[0, 0, 0], length=0.3, direction='z')
+
+    #normal_test()
